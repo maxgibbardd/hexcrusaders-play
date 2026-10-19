@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en-us">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>HexCrusaders</title>
+<link rel="shortcut icon" href="TemplateData/favicon.ico">
+<style>
+  :root {
+    --ink: #11131a;
+    --ink-2: #1a1e28;
+    --parchment: #f5f3e9;
+    --muted: #8d93a1;
+    --accent: #4cb8f0;
+    --accent-2: #5cc77a;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%; overflow: hidden;
+    background: var(--ink);
+    color: var(--parchment);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  /* The canvas owns the whole viewport; Unity matches its render target to this size. */
+  #unity-canvas {
+    display: block; width: 100vw; height: 100vh;
+    background: #0b0d12;
+    outline: none;
+  }
+
+  .overlay {
+    position: fixed; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(ellipse at 50% 35%, #1b2130 0%, #0b0d12 70%);
+    z-index: 10;
+    transition: opacity .45s ease;
+  }
+  .overlay.hidden { opacity: 0; pointer-events: none; }
+
+  .card {
+    width: min(620px, 92vw);
+    padding: 34px 38px;
+    background: rgba(17,19,26,.92);
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 14px;
+    box-shadow: 0 24px 60px rgba(0,0,0,.55);
+  }
+  h1 {
+    margin: 0 0 4px; font-size: 34px; letter-spacing: -.5px;
+  }
+  .sub { margin: 0 0 22px; color: var(--muted); font-size: 15px; }
+
+  .bar {
+    height: 8px; width: 100%; border-radius: 99px;
+    background: rgba(255,255,255,.08); overflow: hidden; margin: 18px 0 8px;
+  }
+  .bar > i {
+    display: block; height: 100%; width: 0%;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    transition: width .2s ease;
+  }
+  .pct { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  .rules { font-size: 14px; line-height: 1.65; color: #c6cad4; }
+  .rules b { color: var(--parchment); }
+  .rules ul { margin: 8px 0 0; padding-left: 18px; }
+
+  button {
+    margin-top: 24px; width: 100%;
+    padding: 14px 18px; font-size: 17px; font-weight: 700;
+    color: #06240f; background: var(--accent-2);
+    border: 0; border-radius: 10px; cursor: pointer;
+  }
+  button:disabled { background: #39404d; color: #8d93a1; cursor: default; }
+  button:not(:disabled):hover { filter: brightness(1.08); }
+
+  #err {
+    margin-top: 16px; padding: 12px 14px; display: none;
+    background: rgba(230,70,60,.14); border: 1px solid rgba(230,70,60,.4);
+    border-radius: 8px; font-size: 13px; color: #ffb9b4; white-space: pre-wrap;
+  }
+  .hint {
+    position: fixed; left: 50%; bottom: 10px; transform: translateX(-50%);
+    font-size: 12px; color: #6d737f; z-index: 5; pointer-events: none;
+  }
+</style>
+</head>
+<body>
+
+<canvas id="unity-canvas" tabindex="-1"></canvas>
+<div class="hint">Right-drag to orbit &nbsp;&middot;&nbsp; scroll to zoom</div>
+
+<div class="overlay" id="overlay">
+  <div class="card">
+    <h1>HexCrusaders</h1>
+    <p class="sub">A 3D hex-grid strategy board game &mdash; hot-seat for 2 to 4 players.</p>
+
+    <div class="rules">
+      <b>How to play</b>
+      <ul>
+        <li>Opening phase: place two settlements and two roads each, snake order.</li>
+        <li>Then roll the dice each turn to collect resources from your junctions.</li>
+        <li>Hover the board to see legal spots &mdash; the glow matches the active player.</li>
+        <li>Build roads, settlements and cities. Trade at the bank, at ports, or with each other.</li>
+        <li>First to <b>10 victory points</b> wins. Roll a 7 and the robber moves.</li>
+      </ul>
+    </div>
+
+    <div class="bar"><i id="barfill"></i></div>
+    <div class="pct" id="pct">Loading engine&hellip;</div>
+
+    <button id="play" disabled>Loading&hellip;</button>
+    <div id="err"></div>
+  </div>
+</div>
+
+<script>
+  var canvas   = document.querySelector("#unity-canvas");
+  var overlay  = document.querySelector("#overlay");
+  var barfill  = document.querySelector("#barfill");
+  var pct      = document.querySelector("#pct");
+  var playBtn  = document.querySelector("#play");
+  var errBox   = document.querySelector("#err");
+
+  function showError(msg) {
+    errBox.style.display = "block";
+    errBox.textContent = String(msg);
+    pct.textContent = "Failed to start.";
+  }
+
+  // Surface engine warnings in the page instead of a blocking alert().
+  function unityShowBanner(msg, type) {
+    if (type === "error") showError(msg);
+    else console.warn("[Unity]", msg);
+  }
+
+  var buildUrl = "Build";
+  var config = {
+    dataUrl:      buildUrl + "/WebGL.data",
+    frameworkUrl: buildUrl + "/WebGL.framework.js",
+    codeUrl:      buildUrl + "/WebGL.wasm",
+    streamingAssetsUrl: "StreamingAssets",
+    companyName:  "HexCrusaders",
+    productName:  "HexCrusaders",
+    productVersion: "1.0.0",
+    showBanner:   unityShowBanner
+  };
+
+  // Mobile gets a device-pixel-ratio cap so the fill rate stays sane.
+  if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
+    config.devicePixelRatio = 1;
+  }
+
+  var script = document.createElement("script");
+  script.src = buildUrl + "/WebGL.loader.js";
+
+  script.onerror = function () {
+    showError("Could not load WebGL.loader.js - the build files are missing or blocked.");
+  };
+
+  script.onload = function () {
+    createUnityInstance(canvas, config, function (progress) {
+      var p = Math.round(progress * 100);
+      barfill.style.width = p + "%";
+      pct.textContent = "Loading engine… " + p + "%";
+    }).then(function () {
+      barfill.style.width = "100%";
+      pct.textContent = "Ready.";
+      playBtn.disabled = false;
+      playBtn.textContent = "Play";
+      playBtn.focus();
+    }).catch(function (message) {
+      showError(message);
+    });
+  };
+
+  playBtn.onclick = function () {
+    overlay.classList.add("hidden");
+    // Give the canvas keyboard focus once the overlay stops intercepting clicks.
+    setTimeout(function () { canvas.focus(); }, 480);
+  };
+
+  document.body.appendChild(script);
+</script>
+</body>
+</html>
